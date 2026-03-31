@@ -87,18 +87,15 @@ export function createWindowsHostAdapter(
 
     // Pixel validation: crop JPEG → raw bytes via sharp
     cropRawPatch(
-      jpegBase64: string,
-      rect: { x: number; y: number; width: number; height: number },
+      _jpegBase64: string,
+      _rect: { x: number; y: number; width: number; height: number },
     ): Buffer | null {
-      // cropRawPatch is async but the interface expects sync.
-      // Use a blocking workaround for the pixel validation path.
-      // The upstream code treats null as "skipped" — validation failure
-      // must never block an action. For the initial implementation,
-      // we return null (skip validation) and plan to add async support.
-      //
-      // TODO: Implement sync crop via sharp's pipeline or switch to
-      // nativeImage equivalent.
-      return null;
+      // cropRawPatch is async (sharp) but the interface expects sync.
+      // Throwing here causes validateClickTarget's catch block to fire,
+      // which returns { valid: true, skipped: true } — click proceeds.
+      // Returning null would cause comparePixelAtLocation to return false,
+      // which is incorrectly treated as "screen changed" (not "skip").
+      throw new Error("cropRawPatch not implemented (sync); skipping pixel validation");
     },
   };
 }
