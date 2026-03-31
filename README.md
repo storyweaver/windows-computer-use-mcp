@@ -9,6 +9,13 @@
   Works with <b>Claude Code</b>, <b>Codex</b>, and <b>OpenClaw</b>.
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Built%20with-Claude%20Code-blueviolet" alt="Built with Claude Code" />
+  <img src="https://img.shields.io/badge/Powered%20by-Claude%20Opus%204.6-blue" alt="Powered by Claude Opus 4.6" />
+  <img src="https://img.shields.io/badge/Tests-70%20passed-brightgreen" alt="70 tests passed" />
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="MIT License" />
+</p>
+
 ---
 
 > **Argus** (Ἄργος Πανόπτης) — the hundred-eyed giant of Greek mythology, the all-seeing guardian who never sleeps. We named this project Argus because it sees your entire desktop through screenshots and controls it with surgical precision — just as the mythological guardian watched over everything entrusted to him.
@@ -250,4 +257,10 @@ MIT
 
 ## Acknowledgements
 
-Built on Anthropic's Chicago MCP architecture, extracted from Claude Code v2.1.88. Upstream code in `src/upstream/` is Anthropic's work; the Windows native layer and integration code is original.
+### Built with Claude
+
+This entire project — architecture design, 6,300+ lines of upstream code analysis, Windows native layer implementation, 70 tests, and this README — was built in a single [Claude Code](https://claude.ai/code) session powered by **Claude Opus 4.6**. The AI agent analyzed Anthropic's Chicago MCP source code, identified the platform-agnostic abstraction boundary (the `ComputerExecutor` interface), reconstructed missing type definitions from usage patterns, implemented the Windows native layer from scratch, and wrote comprehensive tests — all in one continuous session.
+
+### Chicago MCP
+
+The upstream code in `src/upstream/` is from Anthropic's `@ant/computer-use-mcp` package (Chicago MCP), extracted from Claude Code v2.1.88. This is Anthropic's production desktop-control architecture; we ported only the native layer to Windows. The architectural brilliance of separating platform-agnostic logic from native implementation is entirely Anthropic's design.
