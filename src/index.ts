@@ -1,16 +1,10 @@
 /**
  * Cross-platform Computer Use MCP Server — stdio entry point.
  *
- * Detects the current platform (macOS, Windows, Linux) at startup and
- * loads the corresponding host adapter. Uses dynamic imports so
- * platform-specific native dependencies only load on their target OS.
+ * macOS: uses original Claude Code executor (SCContentFilter, enigo, TCC)
+ * Windows: uses argus native layer (node-screenshots, robotjs, Win32 API)
  *
- * Architecture:
- *   This file → platform detection → createXxxHostAdapter
- *     → createComputerUseMcpServer → StdioServerTransport
- *
- * The MCP server uses the SAME tool schemas and dispatch logic as
- * Anthropic's built-in Chicago MCP. Only the native layer differs.
+ * Platform detection at startup, dynamic imports for isolation.
  */
 
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -29,36 +23,72 @@ import type {
 } from "./upstream/types.js";
 import { DEFAULT_GRANT_FLAGS } from "./upstream/types.js";
 import { getLogDir } from "./logger.js";
-import { CuLockManager } from "./cu-lock.js";
 
 // ── Platform detection ────────────────────────────────────────────────────
 
 async function createHostAdapter(): Promise<ComputerUseHostAdapter> {
-  const platform = process.platform;
-
-  if (platform === "darwin") {
-    const { createDarwinHostAdapter } = await import("./host-adapter-darwin.js");
-    return createDarwinHostAdapter({ serverName: "argus" });
+  if (process.platform === "darwin") {
+    const { getComputerUseHostAdapter } = await import("./darwin/hostAdapter.js");
+    return getComputerUseHostAdapter();
   }
 
-  if (platform === "win32") {
+  if (process.platform === "win32") {
     const { createWindowsHostAdapter } = await import("./host-adapter.js");
     return createWindowsHostAdapter({ serverName: "argus" });
   }
 
-  // Linux: use Windows adapter pattern (same sub-gates).
-  // Future: create a dedicated Linux adapter.
   throw new Error(
-    `Unsupported platform: ${platform}. ` +
-    `Argus currently supports macOS (darwin) and Windows (win32).`,
+    `Unsupported platform: ${process.platform}. ` +
+    `Argus supports macOS (darwin) and Windows (win32).`,
   );
 }
 
-// ── Session context (auto-approve + CU lock) ──────────────────────────────
+// ── Lock integration ──────────────────────────────────────────────────────
 
-function createAutoApproveSessionContext(
-  lock: CuLockManager,
-): ComputerUseSessionContext {
+async function createLockCallbacks(): Promise<{
+  checkCuLock?: () => Promise<{ holder: string | undefined; isSelf: boolean }>;
+  acquireCuLock?: () => Promise<void>;
+  formatLockHeldMessage?: (holder: string) => string;
+  release: () => Promise<void>;
+}> {
+  if (process.platform === "darwin") {
+    const {
+      checkComputerUseLock,
+      tryAcquireComputerUseLock,
+      releaseComputerUseLock,
+    } = await import("./darwin/computerUseLock.js");
+
+    return {
+      checkCuLock: async () => {
+        const result = await checkComputerUseLock();
+        if (result.kind === "free") return { holder: undefined, isSelf: false };
+        if (result.kind === "held_by_self") return { holder: result.kind, isSelf: true };
+        return { holder: result.by, isSelf: false };
+      },
+      acquireCuLock: async () => {
+        const result = await tryAcquireComputerUseLock();
+        if (result.kind === "blocked") {
+          throw new Error(`CU lock held by ${result.by}`);
+        }
+      },
+      formatLockHeldMessage: (holder: string) =>
+        `Another session (${holder}) is currently using the computer. ` +
+        `Wait for it to finish, or stop it before starting a new one.`,
+      release: async () => { await releaseComputerUseLock(); },
+    };
+  }
+
+  // Windows: no lock for now (single-user typical)
+  return { release: async () => {} };
+}
+
+// ── Session context (auto-approve) ────────────────────────────────────────
+
+function createAutoApproveSessionContext(lock: {
+  checkCuLock?: () => Promise<{ holder: string | undefined; isSelf: boolean }>;
+  acquireCuLock?: () => Promise<void>;
+  formatLockHeldMessage?: (holder: string) => string;
+}): ComputerUseSessionContext {
   let allowedApps: AppGrant[] = [];
   let grantFlags: CuGrantFlags = { ...DEFAULT_GRANT_FLAGS };
   let selectedDisplayId: number | undefined;
@@ -113,10 +143,10 @@ function createAutoApproveSessionContext(
       lastScreenshotDims = dims;
     },
 
-    // ── CU Lock — cross-process mutex ───────────────────────────────────
-    checkCuLock: () => lock.checkCuLock(),
-    acquireCuLock: () => lock.acquireCuLock(),
-    formatLockHeldMessage: (holder) => lock.formatLockHeldMessage(holder),
+    // CU Lock
+    checkCuLock: lock.checkCuLock,
+    acquireCuLock: lock.acquireCuLock,
+    formatLockHeldMessage: lock.formatLockHeldMessage,
   };
 }
 
@@ -124,7 +154,7 @@ function createAutoApproveSessionContext(
 
 async function main(): Promise<void> {
   const adapter = await createHostAdapter();
-  const lock = new CuLockManager();
+  const lock = await createLockCallbacks();
 
   const coordinateMode: CoordinateMode = "pixels";
   const sessionCtx = createAutoApproveSessionContext(lock);
@@ -148,7 +178,7 @@ async function main(): Promise<void> {
   );
 
   process.on("SIGINT", async () => {
-    lock.release();
+    await lock.release();
     await server.close();
     process.exit(0);
   });
