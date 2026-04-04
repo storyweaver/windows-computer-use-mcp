@@ -51,6 +51,7 @@ export function createWindowsHostAdapter(
   };
 
   const executor = createWindowsExecutor({
+    logger,
     getMouseAnimationEnabled: () => subGates.mouseAnimation,
     getHideBeforeActionEnabled: () => subGates.hideBeforeAction,
   });

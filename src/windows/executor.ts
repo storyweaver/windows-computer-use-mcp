@@ -52,6 +52,7 @@ import {
   readClipboard as nativeReadClipboard,
   writeClipboard as nativeWriteClipboard,
 } from "./clipboard.js";
+import type { Logger } from "../upstream/types.js";
 import { execFile } from "node:child_process";
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -370,10 +371,11 @@ async function launchByAumid(aumid: string): Promise<void> {
 // ── Factory ─────────────────────────────────────────────────────────────────
 
 export function createWindowsExecutor(opts: {
+  logger: Logger;
   getMouseAnimationEnabled: () => boolean;
   getHideBeforeActionEnabled: () => boolean;
 }): ComputerExecutor {
-  const { getMouseAnimationEnabled, getHideBeforeActionEnabled } = opts;
+  const { logger, getMouseAnimationEnabled, getHideBeforeActionEnabled } = opts;
 
   return {
     capabilities: {
@@ -389,6 +391,7 @@ export function createWindowsExecutor(opts: {
       allowlistBundleIds: string[],
       _displayId?: number,
     ): Promise<string[]> {
+      logger.debug(`[executor] prepareForAction allowlist=${JSON.stringify(allowlistBundleIds)}`);
       if (!getHideBeforeActionEnabled()) {
         return [];
       }
@@ -415,12 +418,16 @@ export function createWindowsExecutor(opts: {
         .map((app) => app.bundleId);
 
       if (toHide.length > 0) {
+        logger.debug(`[executor] hiding ${toHide.length} windows: ${toHide.join(", ")}`);
         hideWindows(toHide);
       }
 
       // Activate the first allowed app so our host isn't frontmost
       for (const id of allowlistBundleIds) {
-        if (activateWindow(id)) break;
+        if (activateWindow(id)) {
+          logger.debug(`[executor] activated window: ${id}`);
+          break;
+        }
       }
 
       return toHide;
@@ -479,7 +486,9 @@ export function createWindowsExecutor(opts: {
 
       // Capture screenshot
       try {
+        const t0 = performance.now();
         const screenshot = await captureMonitor(opts.preferredDisplayId);
+        logger.debug(`[executor] resolvePrepareCapture screenshot ${screenshot.width}x${screenshot.height} in ${(performance.now() - t0).toFixed(0)}ms`);
         return {
           ...screenshot,
           hidden,
@@ -507,7 +516,10 @@ export function createWindowsExecutor(opts: {
       allowedBundleIds: string[];
       displayId?: number;
     }): Promise<ScreenshotResult> {
-      return captureMonitor(opts.displayId);
+      const t0 = performance.now();
+      const result = await captureMonitor(opts.displayId);
+      logger.debug(`[executor] screenshot ${result.width}x${result.height} display=${result.displayId} in ${(performance.now() - t0).toFixed(0)}ms`);
+      return result;
     },
 
     async zoom(
@@ -515,6 +527,7 @@ export function createWindowsExecutor(opts: {
       _allowedBundleIds: string[],
       displayId?: number,
     ): Promise<{ base64: string; width: number; height: number }> {
+      logger.debug(`[executor] zoom region=(${regionLogical.x},${regionLogical.y},${regionLogical.w},${regionLogical.h})`);
       const geo = getMonitorGeometry(displayId);
       // Compute target dimensions for the zoomed region
       const { targetImageSize, API_RESIZE_PARAMS } = await import(
@@ -540,6 +553,7 @@ export function createWindowsExecutor(opts: {
 
     async key(keySequence: string, repeat?: number): Promise<void> {
       const n = repeat ?? 1;
+      logger.debug(`[executor] key "${keySequence}" repeat=${n}`);
       for (let i = 0; i < n; i++) {
         if (i > 0) await sleep(8);
         keyTap(keySequence);
@@ -547,6 +561,7 @@ export function createWindowsExecutor(opts: {
     },
 
     async holdKey(keyNames: string[], durationMs: number): Promise<void> {
+      logger.debug(`[executor] holdKey keys=${JSON.stringify(keyNames)} duration=${durationMs}ms`);
       const pressed: string[] = [];
       try {
         for (const k of keyNames) {
@@ -566,9 +581,9 @@ export function createWindowsExecutor(opts: {
     },
 
     async type(text: string, opts: { viaClipboard: boolean }): Promise<void> {
-      // Force clipboard paste for non-ASCII text (CJK etc.) — robotjs
-      // typeString triggers the system IME and produces garbled output.
-      if (opts.viaClipboard || /[^\x00-\x7F]/.test(text)) {
+      const method = (opts.viaClipboard || /[^\x00-\x7F]/.test(text)) ? "clipboard" : "robotjs";
+      logger.debug(`[executor] type len=${text.length} method=${method}`);
+      if (method === "clipboard") {
         await typeViaClipboard(text);
         return;
       }
@@ -576,6 +591,7 @@ export function createWindowsExecutor(opts: {
     },
 
     async typePaced(text: string, delayMs: number): Promise<void> {
+      logger.debug(`[executor] typePaced len=${text.length} delay=${delayMs}ms`);
       // Non-ASCII → clipboard paste (IME bypass), same as type()
       if (/[^\x00-\x7F]/.test(text)) {
         await typeViaClipboard(text);
@@ -587,16 +603,19 @@ export function createWindowsExecutor(opts: {
     // ── Clipboard ─────────────────────────────────────────────────────────
 
     async readClipboard(): Promise<string> {
+      logger.debug("[executor] readClipboard");
       return nativeReadClipboard();
     },
 
     async writeClipboard(text: string): Promise<void> {
+      logger.debug(`[executor] writeClipboard len=${text.length}`);
       return nativeWriteClipboard(text);
     },
 
     // ── Mouse ─────────────────────────────────────────────────────────────
 
     async moveMouse(x: number, y: number): Promise<void> {
+      logger.debug(`[executor] moveMouse (${x},${y})`);
       await moveAndSettle(x, y);
     },
 
@@ -607,6 +626,7 @@ export function createWindowsExecutor(opts: {
       count: 1 | 2 | 3,
       modifiers?: string[],
     ): Promise<void> {
+      logger.debug(`[executor] click (${x},${y}) button=${button} count=${count}${modifiers?.length ? ` mods=${modifiers.join("+")}` : ""}`);
       await moveAndSettle(x, y);
 
       if (modifiers && modifiers.length > 0) {
@@ -632,10 +652,12 @@ export function createWindowsExecutor(opts: {
     },
 
     async mouseDown(): Promise<void> {
+      logger.debug("[executor] mouseDown");
       mouseToggle("press", "left");
     },
 
     async mouseUp(): Promise<void> {
+      logger.debug("[executor] mouseUp");
       mouseToggle("release", "left");
     },
 
@@ -647,6 +669,7 @@ export function createWindowsExecutor(opts: {
       from: { x: number; y: number } | undefined,
       to: { x: number; y: number },
     ): Promise<void> {
+      logger.debug(`[executor] drag from=${from ? `(${from.x},${from.y})` : "current"} to=(${to.x},${to.y})`);
       if (from !== undefined) {
         await moveAndSettle(from.x, from.y);
       }
@@ -665,6 +688,7 @@ export function createWindowsExecutor(opts: {
       dx: number,
       dy: number,
     ): Promise<void> {
+      logger.debug(`[executor] scroll (${x},${y}) dx=${dx} dy=${dy}`);
       await moveAndSettle(x, y);
       if (dy !== 0) {
         nativeScrollMouse(
@@ -685,10 +709,12 @@ export function createWindowsExecutor(opts: {
     async getFrontmostApp(): Promise<FrontmostApp | null> {
       const info = getForegroundWindowInfo();
       if (!info) return null;
-      return {
+      const app = {
         bundleId: info.exePath.toLowerCase(),
         displayName: extractAppName(info.title, info.exeName),
       };
+      logger.debug(`[executor] getFrontmostApp → ${app.displayName} (${info.exeName})`);
+      return app;
     },
 
     async appUnderPoint(
@@ -747,8 +773,12 @@ export function createWindowsExecutor(opts: {
     },
 
     async openApp(bundleId: string): Promise<void> {
+      logger.info(`[executor] openApp "${bundleId}"`);
       // Try to activate an existing window first
-      if (activateWindow(bundleId)) return;
+      if (activateWindow(bundleId)) {
+        logger.debug(`[executor] openApp → activated existing window`);
+        return;
+      }
 
       // If it's an AUMID, check cache and launch via shell:AppsFolder
       await ensureAumidCache();
